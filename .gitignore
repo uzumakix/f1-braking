@@ -11,3 +11,6 @@ venv/
 .idea/
 .vscode/
 .pytest_cache/
+
+# downloaded telemetry cache
+cache/

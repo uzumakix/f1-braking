@@ -1,97 +1,84 @@
-<p align="center">
-  <img src="assets/f1_banner.png" width="720" />
-</p>
+# Braking analysis from Formula 1 telemetry, Monza 2023
 
-## Project rationale
+Takes the speed trace of a qualifying lap, differentiates it, and reads off where a driver starts
+braking for Turn 1 and how hard. The comparison is Verstappen against Sainz in the 2023 Italian Grand
+Prix qualifying session, and the output is a braking profile laid out against distance along the
+track rather than against time, so two laps run at different speeds still line up at the same point
+on the circuit.
 
-Using real speed data from an actual F1 qualifying lap at Monza, this code figures out exactly where and how hard each driver brakes. The raw telemetry arrives as noisy, irregularly sampled sensor readings at ~240 Hz. The pipeline cleans it, differentiates it, and extracts spatial braking profiles that can be compared across drivers.
+![Speed and deceleration through the Turn 1 braking zone for both drivers](results/braking_analysis.png)
 
-# Braking Deceleration Analysis from F1 Telemetry
-
-Signal processing pipeline computing kinematic deceleration (dv/dt) into Turn 1 at Monza. Uses real FIA sensor data from the 2023 Italian GP Qualifying to compare Verstappen vs Sainz braking profiles.
-
-## What the project finds
-
-Sainz brakes **9 metres later** than Verstappen into Turn 1 (782m vs 773m from the start line) and hits **-6.03 G** of peak longitudinal deceleration compared to Verstappen's **-5.10 G**. The SF-23's mechanical grip lets Sainz commit to a later, harder brake application and still rotate the car through the corner.
-
-![braking analysis](results/braking_analysis.png)
-
-The full-lap speed trace shows the context. Both cars hit ~340 km/h on the main straight before the T1 braking zone (highlighted region).
-
-![full lap speed](results/full_lap_speed.png)
-
-## Data pipeline and validation
-
-Raw telemetry is sourced from the FIA live timing system via the FastF1 API. The library handles session identification, lap selection, and channel alignment. The data arrives as irregularly sampled time series at approximately 240 Hz.
-
-**Preprocessing steps:**
-- FastF1 interpolates missing telemetry frames internally using its built-in resampling engine. No additional interpolation was applied.
-- Speed values are converted from km/h to m/s before differentiation.
-- Longitudinal acceleration is computed via `numpy.gradient` (second-order central differences). No low-pass filter or smoothing is applied before the derivative; the 5-sample uniform filter is used only in the dashboard visualization layer to reduce visual noise.
-- The braking zone is isolated by distance window (600m to 1050m from the start line), not by time, to ensure spatial alignment across drivers with different speed profiles.
-
-**Validation:** The computed deceleration traces are overlaid directly against the raw FIA brake channel (binary on/off) as a consistency check. Brake onset in the computed dv/dt signal aligns within 2 data frames (~8 ms) of the FIA brake channel activation for both drivers, confirming that the numerical differentiation preserves temporal accuracy without introducing phase lag.
+![Full-lap speed trace with the Turn 1 braking zone marked](results/full_lap_speed.png)
 
 ## How it works
 
-Three steps.
+**Getting the data.** `pipeline.py` pulls speed, throttle, brake and distance channels for the fastest
+qualifying lap of each driver through the FastF1 library, which wraps the published timing feed.
 
-1. **Ingest raw sensors.** `pipeline.py` connects to the FastF1 API and downloads speed, throttle, brake, and distance telemetry for the fastest Q laps of VER and SAI. The data comes from the FIA timing system at ~240 Hz.
+**The maths.** Speed arrives in km/h and is converted to m/s. Longitudinal acceleration is the
+derivative of speed with respect to time, computed with `numpy.gradient`, which uses a central
+difference and is therefore second-order accurate on evenly spaced samples. Dividing by 9.81 puts the
+result in G, which is how the figure is labelled because that is the unit the sport uses.
 
-2. **Apply the math.** Convert speed from km/h to m/s. Then compute the numerical derivative of velocity over time:
+No smoothing is applied before differentiating. Smoothing first would shift the braking point, since
+any filter with a window wider than a sample drags a sharp edge later in time, and the braking point
+is exactly the sharp edge being measured. The dashboard applies a five-sample average for display
+only, after the derivative has been taken.
 
-   ```
-   a(t) = dv/dt    [m/s2]
-   G = a / 9.81    [dimensionless]
-   ```
+**Picking the zone.** The braking zone is cut out by distance, from 600 to 1050 metres past the start
+line, rather than by time. Two drivers reach Turn 1 at different moments, so a time window would
+compare different parts of the corner; a distance window compares the same stretch of tarmac.
 
-   This uses `numpy.gradient` (central differences, second-order accurate). No resampling or smoothing before the derivative.
+## Checking the data before trusting it
 
-3. **Visualise the physics.** `dashboard.py` is a Streamlit app that plots speed and deceleration through the T1 braking zone (600m to 1050m). It marks the brake point for each driver and annotates peak G values.
+`measure_telemetry.py` exists to answer the questions that have to come before any result: how often a
+speed sample actually arrives, what the gap between samples is at the fifth and ninety-fifth
+percentile, and how far apart the braking onset computed from the derivative sits from the car's own
+brake channel, measured in samples, milliseconds and metres.
 
-## Project structure
-
-```
-pipeline.py         ingest + deceleration math (a = dv/dt)
-dashboard.py        streamlit dashboard (interactive)
-generate_plots.py   static plot generation for README
-assets/
-    f1_banner.png   header image (Monza 2023)
-tools/
-    resample.c      C resampler for uniform timestep conversion
-    Makefile        build for resample tool
-docs/
-    methodology.md  signal processing notes and validation
-tests/
-    test_pipeline.py   pipeline correctness checks
-    conftest.py        shared fixtures
-results/
-    braking_analysis.png    T1 speed + decel chart
-    full_lap_speed.png      full-lap speed trace
-```
-
-## How to run the GUI
+Run it before quoting any number from this repository:
 
 ```bash
-git clone https://github.com/uzumakix/f1-digital-twin-monza.git
-cd f1-digital-twin-monza
 pip install -r requirements.txt
-streamlit run dashboard.py
+python measure_telemetry.py
 ```
 
-First run downloads ~50 MB from FIA servers (cached after that).
+It prints the sampling interval it measured rather than relying on any assumed figure, which matters:
+the published feed is far coarser than a car's internal sensors, and the resolution of the braking
+point can be no finer than the gap between two samples. The figures above were produced by an earlier
+run of the pipeline; `measure_telemetry.py` regenerates the underlying numbers from scratch.
 
-For static plots only:
+## Running the rest
+
+Static figures:
 
 ```bash
 python generate_plots.py
 ```
 
+Interactive dashboard:
+
+```bash
+streamlit run dashboard.py
+```
+
+First run downloads the session from the timing servers and caches it locally.
+
+## Limits
+
+- Deceleration here is kinematic, worked out from how the speed changes. It is not a measurement of
+  force at the tyre, and it folds in aerodynamic drag, engine braking and the brakes themselves
+  without separating them.
+- Two laps, two drivers, one corner. Nothing here says anything general about either car.
+- The resolution of the braking point is bounded by the sampling interval of the published feed, which
+  is why the script above measures that interval rather than assuming it.
+- Speed is scalar. Lateral acceleration through the corner is not part of this.
+
 ## References
 
-- Resnick, R., Halliday, D., & Walker, J. (2013). *Fundamentals of Physics*, 10th ed. Standard kinematic equations: `v = v0 + at`, `a = dv/dt`.
-- Milliken, W. F. & Milliken, D. L. (1995). *Race Car Vehicle Dynamics*. SAE International. Longitudinal tire force and braking dynamics.
-- Treiber, M., Hennecke, A., & Helbing, D. (2000). *Congested traffic states in empirical observations and microscopic simulations.* Physical Review E, 62(2), 1805-1824.
-- FastF1 telemetry library: [theOehrly/Fast-F1](https://github.com/theOehrly/Fast-F1).
+1. Milliken, W. F. & Milliken, D. L. (1995). *Race Car Vehicle Dynamics*. SAE International.
+2. FastF1: [theOehrly/Fast-F1](https://github.com/theOehrly/Fast-F1).
+
+## License
 
 [MIT](LICENSE)
