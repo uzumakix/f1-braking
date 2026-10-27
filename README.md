@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/f1_banner.png" width="720" />
+</p>
+
 # Braking analysis from Formula 1 telemetry, Monza 2023
 
 Takes the speed trace of a qualifying lap, differentiates it, and reads off where a driver starts
