@@ -6,6 +6,11 @@ Prix qualifying session, and the output is a braking profile laid out against di
 track rather than against time, so two laps run at different speeds still line up at the same point
 on the circuit.
 
+The calculation is checked against cases with known answers before it is pointed at real data. Given
+a trace built to decelerate at -2.831578 G it returns -2.831578 G, and a test across sampling rates
+shows that peak deceleration survives coarse sampling while the braking point does not: at 100
+milliseconds between samples the braking point lands 8.9 metres late. Numbers below.
+
 ![Speed and deceleration through the Turn 1 braking zone for both drivers](results/braking_analysis.png)
 
 ![Full-lap speed trace with the Turn 1 braking zone marked](results/full_lap_speed.png)
@@ -28,6 +33,38 @@ only, after the derivative has been taken.
 **Picking the zone.** The braking zone is cut out by distance, from 600 to 1050 metres past the start
 line, rather than by time. Two drivers reach Turn 1 at different moments, so a time window would
 compare different parts of the corner; a distance window compares the same stretch of tarmac.
+
+## Checking the maths
+
+`verify_math.py` runs the pipeline on traces whose answer is known in advance, so the calculation can
+be checked without any telemetry at all.
+
+Feed it a speed ramp from 300 to 100 km/h over exactly two seconds, which is a deceleration of
+-2.831578 G by hand, and it returns -2.831578 G, with the largest error anywhere in the trace being
+4.7e-07 G. That is the expected result rather than a lucky one: a central difference is exact on a
+straight line, so anything beyond rounding error would mean a bug.
+
+The second check is the one that matters for reading a braking point off this data. Take a car
+holding 340 km/h that brakes at exactly 780 metres, sample it at different rates, and ask where the
+pipeline thinks the braking began:
+
+| gap between samples | braking point found at | error |
+|---|---|---|
+| 1 ms | 780.0 m | 0.0 m |
+| 10 ms | 780.4 m | +0.4 m |
+| 20 ms | 781.3 m | +1.3 m |
+| 50 ms | 784.2 m | +4.2 m |
+| 100 ms | 788.9 m | +8.9 m |
+| 240 ms | 781.3 m | +1.3 m |
+
+Peak deceleration comes back as -5.00 G at every one of those rates, so the magnitude survives coarse
+sampling. The braking point does not, and the error is not a tidy function of the gap: the 240 ms row
+lands closer than the 100 ms row because what decides the answer is where the first sample after the
+driver hits the brakes happens to fall. The gap sets a ceiling on the error, not a fixed value. At
+340 km/h a car covers 0.9 metres between samples 10 ms apart and 22.7 metres between samples 240 ms
+apart, and that distance is the honest resolution limit on any braking point quoted from this feed.
+
+Which is why the next section exists.
 
 ## Checking the data before trusting it
 
